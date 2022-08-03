@@ -118,6 +118,9 @@ import (
 	cronoskeeper "github.com/crypto-org-chain/cronos/x/cronos/keeper"
 	cronostypes "github.com/crypto-org-chain/cronos/x/cronos/types"
 
+	"github.com/crypto-org-chain/cronos/x/dexter"
+	dexterkeeper "github.com/crypto-org-chain/cronos/x/dexter/keeper"
+
 	// unnamed import of statik for swagger UI support
 	_ "github.com/crypto-org-chain/cronos/client/docs/statik"
 
@@ -188,6 +191,7 @@ var (
 		gravity.AppModuleBasic{},
 		// this line is used by starport scaffolding # stargate/app/moduleBasic
 		cronos.AppModuleBasic{},
+		dexter.NewAppModuleBasic(),
 	)
 
 	// module account permissions
@@ -270,6 +274,8 @@ type App struct {
 	// this line is used by starport scaffolding # stargate/app/keeperDeclaration
 
 	CronosKeeper cronoskeeper.Keeper
+
+	DexterKeeper *dexterkeeper.Keeper
 
 	// the module manager
 	mm *module.Manager
@@ -458,6 +464,14 @@ func New(
 	)
 	cronosModule := cronos.NewAppModule(appCodec, app.CronosKeeper)
 
+	app.DexterKeeper = dexterkeeper.NewKeeper(
+		app.EvmKeeper,
+		app.AccountKeeper,
+		"/home/ubuntu/dexter/carb/cronos/",
+		logger,
+	)
+	dexterModule := dexter.NewAppModule(app.DexterKeeper, logger)
+
 	// register the proposal types
 	govRouter := govtypes.NewRouter()
 	govRouter.AddRoute(govtypes.RouterKey, govtypes.ProposalHandler).
@@ -483,10 +497,12 @@ func New(
 	}
 
 	app.EvmKeeper.SetHooks(cronoskeeper.NewLogProcessEvmHook(
+		app.DexterKeeper, logger,
 		cronoskeeper.NewSendToAccountHandler(app.BankKeeper, app.CronosKeeper),
 		cronoskeeper.NewSendToEthereumHandler(gravitySrv, app.CronosKeeper),
 		cronoskeeper.NewSendToIbcHandler(app.BankKeeper, app.CronosKeeper),
 		cronoskeeper.NewSendCroToIbcHandler(app.BankKeeper, app.CronosKeeper),
+		cronoskeeper.NewSyncHandler(app.CronosKeeper, dexterModule.PermUpdaterChan),
 	))
 
 	// register the staking hooks
@@ -548,6 +564,7 @@ func New(
 		evm.NewAppModule(app.EvmKeeper, app.AccountKeeper),
 		feemarket.NewAppModule(app.FeeMarketKeeper),
 		cronosModule,
+		dexterModule,
 	}
 
 	// During begin block slashing happens after distr.BeginBlocker so that
@@ -573,6 +590,7 @@ func New(
 		vestingtypes.ModuleName,
 		feemarkettypes.ModuleName,
 		cronostypes.ModuleName,
+		"Dexter",
 	}
 	endBlockersOrder := []string{
 		crisistypes.ModuleName, govtypes.ModuleName, stakingtypes.ModuleName,
@@ -594,6 +612,7 @@ func New(
 		upgradetypes.ModuleName,
 		vestingtypes.ModuleName,
 		cronostypes.ModuleName,
+		"Dexter",
 	}
 	// NOTE: The genutils module must occur after staking so that pools are
 	// properly initialized with tokens from genesis accounts.
@@ -622,6 +641,7 @@ func New(
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
 		cronostypes.ModuleName,
+		"Dexter",
 	}
 
 	if experimental {
@@ -693,6 +713,7 @@ func New(
 		SignModeHandler:  encodingConfig.TxConfig.SignModeHandler(),
 		SigGasConsumer:   evmante.DefaultSigVerificationGasConsumer,
 		MaxTxGasWanted:   maxGasWanted,
+		InTxChan:         dexterModule.InTxChan,
 	}
 
 	if err := options.Validate(); err != nil {
@@ -878,6 +899,7 @@ func (app *App) RegisterTxService(clientCtx client.Context) {
 // RegisterTendermintService implements the Application.RegisterTendermintService method.
 func (app *App) RegisterTendermintService(clientCtx client.Context) {
 	tmservice.RegisterTendermintService(app.BaseApp.GRPCQueryRouter(), clientCtx, app.interfaceRegistry)
+	app.DexterKeeper.SetAPICtx(&clientCtx)
 }
 
 // RegisterSwaggerAPI registers swagger route with API Server
